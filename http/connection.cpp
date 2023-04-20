@@ -1,3 +1,5 @@
+#include <asm-generic/errno-base.h>
+#include <asm-generic/errno.h>
 #include <cstdlib>
 #include <unistd.h>      /*FOR USING FORK for at a time send and receive messages*/
 #include <errno.h>       /*USING THE ERROR LIBRARY FOR FINDING ERRORS*/
@@ -16,6 +18,8 @@
 #include <map>
 #include <chrono>
 #include <mutex>
+#include <netinet/tcp.h>
+#include <fcntl.h>
 
 #include "connection.hpp"
 
@@ -66,22 +70,45 @@ std::pair<int, NetError> socket_connect(char *hostname, int port) {
     if (sock < 0)
         return std::make_pair(sock, NetError{sock});
 
-    // Set socket options
-    int timeout = 3000; // 10 seconds
-    struct timeval tv;
-    tv.tv_sec = timeout / 1000;
-    tv.tv_usec = (timeout % 1000) * 1000;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
-    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof tv);
-    // setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(int));
+    int flags = fcntl(sock, F_GETFL, 0);
+    flags |= O_NONBLOCK;
+    fcntl(sock, F_SETFL, flags);
+
+    int val = 1;
+    setsockopt(
+        sock,
+        IPPROTO_TCP,
+        TCP_NODELAY,
+        (void*)&val,
+        sizeof(int));
 
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = resolver.Resolve(hostname);
 
-    int con = connect(sock, (struct sockaddr*)&addr, sizeof(addr));
-    if (con < 0)
-        return std::make_pair(sock, NetError{errno});
+    int retval = connect(sock, (struct sockaddr*)&addr, sizeof(addr));
+
+    fd_set wfds;
+    FD_ZERO(&wfds);
+    FD_SET(sock, &wfds);
+
+    struct timeval tv = {.tv_sec = 5, .tv_usec = 0};
+    retval = select(sock+1, NULL, &wfds, NULL, &tv);
+    if (retval == 0) {
+        close(sock);
+        return std::make_pair(sock, NetError{"connect timeout"});
+    }
+
+    int err = 0;
+    int l = sizeof(int);
+    getsockopt(sock, SOL_SOCKET, SO_ERROR, (void*)&err, (socklen_t*)&l);
+    if (err != 0) {
+        close(sock);
+        return std::make_pair(sock, NetError{err});
+    }
+
+    flags &= ~O_NONBLOCK;
+    fcntl(sock, F_SETFL, flags);
 
     return std::make_pair(sock, NetError{});
 }

@@ -11,6 +11,13 @@ struct NetError {
 
     NetError() : code(0), isErr(false) {}
 
+    NetError(const char* msg)
+        : code(0)
+        , isErr(true)
+        , message(msg)
+    {
+    }
+
     NetError(int errNo)
         : code(errNo)
         , isErr(true)
